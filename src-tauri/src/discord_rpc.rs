@@ -27,7 +27,7 @@ mod imp {
     const MAX_DISCORD_PIPES: u8 = 10;
     const DISCORD_LARGE_IMAGE_KEY: &str = "https://s.crun.zip/aimmod.png";
     const DISCORD_SMALL_IMAGE_KEY: &str = "https://cdn.discordapp.com/app-icons/1162428887066742904/798981b85db0ce80a8168c1184ef92a2.png?size=1280";
-    const AIMMOD_URL: &str = "https://github.com/veryCrunchy/kovaaks";
+    const AIMMOD_URL: &str = "https://github.com/TRemigi/aimmod";
     const AIMMOD_DISCORD_URL: &str = "https://discord.gg/snwC66wShD";
     const BRIDGE_PRESENCE_STALE_AFTER: Duration = Duration::from_secs(8);
     const PRESENCE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);

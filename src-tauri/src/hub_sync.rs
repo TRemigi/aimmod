@@ -461,32 +461,37 @@ pub fn get_sync_overview(app: &AppHandle) -> anyhow::Result<HubSyncOverview> {
     build_sync_overview(app, true)
 }
 
-fn open_external_url(url: &str) -> anyhow::Result<()> {
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "", url])
-            .spawn()?;
-        return Ok(());
+fn is_loopback_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
+}
+
+/// Checks a server-supplied link before it reaches the OS. The link must be a plain
+/// web URL on the same host as the Hub API: https, or http only for a local dev hub.
+fn validate_hub_link(url: &str, base_url: &str) -> anyhow::Result<reqwest::Url> {
+    let link = reqwest::Url::parse(url).context("hub returned an invalid verification link")?;
+    let base = reqwest::Url::parse(base_url).context("hub API base URL is invalid")?;
+    let link_host = link.host_str().unwrap_or_default();
+    let secure = link.scheme() == "https" || (link.scheme() == "http" && is_loopback_host(link_host));
+    if !secure {
+        anyhow::bail!("hub verification link must use https");
     }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open").arg(url).spawn()?;
-        return Ok(());
+    if link_host.is_empty() || !link_host.eq_ignore_ascii_case(base.host_str().unwrap_or_default()) {
+        anyhow::bail!("hub verification link points to a different host than the hub");
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        std::process::Command::new("xdg-open").arg(url).spawn()?;
-        return Ok(());
+    if !link.username().is_empty() || link.password().is_some() {
+        anyhow::bail!("hub verification link must not contain credentials");
     }
-    #[cfg(not(any(
-        target_os = "windows",
-        target_os = "macos",
-        all(unix, not(target_os = "macos"))
-    )))]
-    {
-        anyhow::bail!("opening a browser is not supported on this platform")
-    }
+    Ok(link)
+}
+
+/// Opens a validated link in the default browser. This goes through the shell plugin
+/// (ShellExecuteW / open / xdg-open with the URL as one argument), never through
+/// `cmd.exe`, so characters like `&` or `|` in the URL cannot start other commands.
+fn open_external_url(app: &AppHandle, url: &reqwest::Url) -> anyhow::Result<()> {
+    use tauri_plugin_shell::ShellExt;
+    #[allow(deprecated)]
+    let result = app.shell().open(url.as_str(), None);
+    result.map_err(|error| anyhow::anyhow!("could not open the browser: {error}"))
 }
 
 pub async fn start_device_link(
@@ -516,7 +521,8 @@ pub async fn start_device_link(
     }
 
     let payload = response.json::<DeviceLinkStartResponse>().await?;
-    open_external_url(&payload.verification_uri_complete)?;
+    let link = validate_hub_link(&payload.verification_uri_complete, &base_url)?;
+    open_external_url(app, &link)?;
 
     Ok(HubDeviceLinkSession {
         device_code: payload.device_code,
@@ -2381,5 +2387,43 @@ impl SessionSummaryValue {
             number_value: None,
             bool_value: Some(value),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_hub_link;
+
+    #[test]
+    fn accepts_https_link_on_hub_host() {
+        assert!(validate_hub_link("https://aimmod.app/link?code=ABCD-1234", "https://aimmod.app").is_ok());
+    }
+
+    #[test]
+    fn rejects_links_that_could_reach_the_shell_or_other_hosts() {
+        let base = "https://aimmod.app";
+        for link in [
+            "https://evil.example/link",
+            "http://aimmod.app/link",
+            "file:///C:/Windows/System32/calc.exe",
+            "calc.exe",
+            "https://user:pass@aimmod.app/link",
+            "ms-settings:privacy",
+        ] {
+            assert!(validate_hub_link(link, base).is_err(), "{link} should be rejected");
+        }
+    }
+
+    #[test]
+    fn opening_never_uses_cmd() {
+        // `&` survives as part of a single URL argument; it is only dangerous through cmd.exe.
+        let link = validate_hub_link("https://aimmod.app/link?a=1&calc.exe", "https://aimmod.app").unwrap();
+        assert_eq!(link.host_str(), Some("aimmod.app"));
+        assert!(!include_str!("hub_sync.rs").contains(concat!("Command::new(", "\"cmd\")")));
+    }
+
+    #[test]
+    fn allows_plain_http_only_for_a_local_dev_hub() {
+        assert!(validate_hub_link("http://127.0.0.1:8080/link", "http://127.0.0.1:8080").is_ok());
     }
 }
