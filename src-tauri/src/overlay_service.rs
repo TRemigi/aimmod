@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
-const OVERLAY_PORT: u16 = 43115;
+pub(crate) const OVERLAY_PORT: u16 = 43115;
 static STARTED: AtomicBool = AtomicBool::new(false);
 static PALETTE_CACHE: OnceLock<Mutex<Option<CachedPalette>>> = OnceLock::new();
 static HUB_PB_CACHE: OnceLock<Mutex<HashMap<HubPbCacheKey, CachedHubPb>>> = OnceLock::new();
