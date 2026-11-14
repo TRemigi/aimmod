@@ -27,9 +27,6 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
-
       - name: Rust build cache
         uses: swatinem/rust-cache@v2
         with:
@@ -45,6 +42,19 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Path src-tauri/ue4ss -Force | Out-Null
 
+      # .cargo/config.toml routes rustc through sccache. On a cold Windows build sccache
+      # fails with "filename or extension is too long" (os error 206) on long rustc command
+      # lines; plain cargo falls back to an argument file instead. rust-cache still caches.
       - name: Check Rust
         run: cargo check
         working-directory: src-tauri
+        env:
+          RUSTC_WRAPPER: ""
+          CARGO_BUILD_RUSTC_WRAPPER: ""
+
+      - name: Run security tests
+        run: cargo test --lib -- hub_sync::tests overlay_service::request_check_tests
+        working-directory: src-tauri
+        env:
+          RUSTC_WRAPPER: ""
+          CARGO_BUILD_RUSTC_WRAPPER: ""

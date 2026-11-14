@@ -3,7 +3,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://github.com/veryCrunchy/kovaaks/releases/download/main-prod/latest.json"
+        "https://github.com/TRemigi/aimmod/releases/download/main-prod/latest.json"
       ]
     }
   }

@@ -5842,13 +5842,18 @@ mod imp {
             ));
         }
 
-        let overlay_url = to_file_url(overlay_index);
+        // The bundled overlay page is loaded from the local overlay server rather than
+        // file://, so its API calls are same-origin. A file:// page sends `Origin: null`,
+        // which the overlay server refuses because sandboxed pages on any website send it too.
         let overlay_url = if overlay_index.file_name().and_then(|name| name.to_str())
             == Some(IN_GAME_OVERLAY_INDEX_FILE)
         {
-            format!("{overlay_url}?surface=in_game")
+            format!(
+                "http://127.0.0.1:{}/{IN_GAME_OVERLAY_INDEX_FILE}?surface=in_game",
+                crate::overlay_service::OVERLAY_PORT
+            )
         } else {
-            overlay_url
+            to_file_url(overlay_index)
         };
         let overlay_url_path = game_bin_dir.join(IN_GAME_OVERLAY_URL_FILE);
         std::fs::write(&overlay_url_path, format!("{}\n", overlay_url)).map_err(|e| {

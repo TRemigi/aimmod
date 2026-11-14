@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
-const OVERLAY_PORT: u16 = 43115;
+pub(crate) const OVERLAY_PORT: u16 = 43115;
 static STARTED: AtomicBool = AtomicBool::new(false);
 static PALETTE_CACHE: OnceLock<Mutex<Option<CachedPalette>>> = OnceLock::new();
 static HUB_PB_CACHE: OnceLock<Mutex<HashMap<HubPbCacheKey, CachedHubPb>>> = OnceLock::new();
@@ -158,27 +158,94 @@ fn handle_client(
         .next()
         .unwrap_or("/");
 
-    loop {
+    let mut host: Option<String> = None;
+    let mut origin: Option<String> = None;
+    for _ in 0..100 {
         let mut header = String::new();
         reader.read_line(&mut header)?;
         if header == "\r\n" || header.is_empty() {
             break;
         }
+        if let Some((name, value)) = header.split_once(':') {
+            let value = value.trim().to_string();
+            if name.trim().eq_ignore_ascii_case("host") {
+                host = Some(value);
+            } else if name.trim().eq_ignore_ascii_case("origin") {
+                origin = Some(value);
+            }
+        }
     }
+
+    // Only OBS (same origin), AimMod's own windows and the dev server may read overlay
+    // data. Other websites open in a browser get 403 instead of live stats and mouse data,
+    // and a foreign Host header (DNS rebinding) is refused too.
+    let cors = match check_request(host.as_deref(), origin.as_deref()) {
+        Ok(cors) => cors,
+        Err(()) => return forbidden(&mut stream),
+    };
 
     match path {
         "/" => redirect(&mut stream, "/browser-overlay.html?surface=obs"),
         "/obs-overlay.html" | "/browser-overlay.html" => {
             serve_static_file(&mut stream, app, "browser-overlay.html")
         }
-        "/api/streamer-overlay/state" => serve_json(&mut stream, &build_state(app, settings)),
-        "/api/streamer-overlay/events" => serve_sse(stream, app, settings),
-        "/api/streamer-overlay/mouse-path" => serve_mouse_path(&mut stream),
+        "/api/streamer-overlay/state" => {
+            serve_json(&mut stream, &cors, &build_state(app, settings))
+        }
+        "/api/streamer-overlay/events" => serve_sse(stream, &cors, app, settings),
+        "/api/streamer-overlay/mouse-path" => serve_mouse_path(&mut stream, &cors),
         asset_path => {
             let relative = asset_path.trim_start_matches('/');
             serve_static_file(&mut stream, app, relative)
         }
     }
+}
+
+/// Origins allowed to read overlay data cross-origin: the overlay page itself, the
+/// Tauri webviews (Windows uses http(s)://tauri.localhost, other platforms tauri://localhost)
+/// and the Vite dev server.
+const ALLOWED_ORIGINS: &[&str] = &[
+    "http://127.0.0.1:43115",
+    "http://localhost:43115",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+];
+
+const ALLOWED_HOSTS: &[&str] = &["127.0.0.1:43115", "localhost:43115"];
+
+/// Returns the CORS header lines to send, or Err when the request must be refused.
+/// A missing Origin means a same-origin page (OBS) or a non-browser client, which is allowed.
+fn check_request(host: Option<&str>, origin: Option<&str>) -> Result<String, ()> {
+    if let Some(host) = host {
+        if !ALLOWED_HOSTS.iter().any(|allowed| host.eq_ignore_ascii_case(allowed)) {
+            return Err(());
+        }
+    }
+    match origin {
+        None => Ok(String::new()),
+        Some(origin) => {
+            let origin = origin.trim_end_matches('/');
+            match ALLOWED_ORIGINS
+                .iter()
+                .find(|allowed| origin.eq_ignore_ascii_case(allowed))
+            {
+                Some(allowed) => Ok(format!(
+                    "Access-Control-Allow-Origin: {allowed}\r\nVary: Origin\r\n"
+                )),
+                None => Err(()),
+            }
+        }
+    }
+}
+
+fn forbidden(stream: &mut TcpStream) -> std::io::Result<()> {
+    write!(
+        stream,
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 9\r\nConnection: close\r\n\r\nForbidden"
+    )
 }
 
 fn redirect(stream: &mut TcpStream, location: &str) -> std::io::Result<()> {
@@ -188,7 +255,7 @@ fn redirect(stream: &mut TcpStream, location: &str) -> std::io::Result<()> {
     )
 }
 
-fn serve_mouse_path(stream: &mut TcpStream) -> std::io::Result<()> {
+fn serve_mouse_path(stream: &mut TcpStream, cors: &str) -> std::io::Result<()> {
     let positions = crate::mouse_hook::get_raw_positions();
     let recent: Vec<_> = if positions.is_empty() {
         vec![]
@@ -203,17 +270,21 @@ fn serve_mouse_path(stream: &mut TcpStream) -> std::io::Result<()> {
     let body = serde_json::to_vec(&recent).unwrap_or_else(|_| b"[]".to_vec());
     write!(
         stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n{cors}Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )?;
     stream.write_all(&body)
 }
 
-fn serve_json<T: serde::Serialize>(stream: &mut TcpStream, value: &T) -> std::io::Result<()> {
+fn serve_json<T: serde::Serialize>(
+    stream: &mut TcpStream,
+    cors: &str,
+    value: &T,
+) -> std::io::Result<()> {
     let body = serde_json::to_vec(value).unwrap_or_else(|_| b"{}".to_vec());
     write!(
         stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n{cors}Content-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )?;
     stream.write_all(&body)
@@ -221,12 +292,13 @@ fn serve_json<T: serde::Serialize>(stream: &mut TcpStream, value: &T) -> std::io
 
 fn serve_sse(
     mut stream: TcpStream,
+    cors: &str,
     app: &AppHandle,
     settings: &Arc<std::sync::Mutex<crate::settings::AppSettings>>,
 ) -> std::io::Result<()> {
     write!(
         stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\n{cors}\r\n"
     )?;
 
     let mut last_signature = String::new();
@@ -856,5 +928,35 @@ fn build_state(
             has_recent_stats: bridge::has_recent_bridge_stats_flow(),
             restart_required: bridge::is_runtime_restart_required(),
         },
+    }
+}
+
+#[cfg(test)]
+mod request_check_tests {
+    use super::check_request;
+
+    #[test]
+    fn same_origin_and_non_browser_requests_are_allowed_without_cors() {
+        assert_eq!(check_request(Some("127.0.0.1:43115"), None), Ok(String::new()));
+        assert_eq!(check_request(None, None), Ok(String::new()));
+    }
+
+    #[test]
+    fn aimmod_windows_get_their_origin_echoed() {
+        let cors = check_request(Some("127.0.0.1:43115"), Some("http://tauri.localhost")).unwrap();
+        assert!(cors.contains("Access-Control-Allow-Origin: http://tauri.localhost"));
+        assert!(!cors.contains('*'));
+    }
+
+    #[test]
+    fn other_websites_are_refused() {
+        for origin in ["https://evil.example", "null", "http://127.0.0.1:43115.evil.example"] {
+            assert_eq!(check_request(Some("127.0.0.1:43115"), Some(origin)), Err(()), "{origin}");
+        }
+    }
+
+    #[test]
+    fn dns_rebinding_hosts_are_refused() {
+        assert_eq!(check_request(Some("evil.example:43115"), None), Err(()));
     }
 }

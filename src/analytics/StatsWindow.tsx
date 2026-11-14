@@ -8,7 +8,6 @@ import remarkGfm from "remark-gfm";
 import { LeaderboardBrowser, ScenarioLeaderboardPanel } from "./LeaderboardBrowser";
 import { DebugTab } from "./DebugTab";
 import { HubBrowserPanel } from "./HubBrowser";
-import { OsuWorkspace } from "../osu/OsuWorkspace";
 import { MousePathViewer } from "./MousePathViewer";
 import type {
   ReplayPayloadData,
@@ -8556,16 +8555,15 @@ function ScenarioDetails({
 // ─── Root ─────────────────────────────────────────────────────────────────────
 
 type RootMode = "sessions" | "hub" | "replays" | "leaderboards" | "settings" | "debug";
-type ActiveGame = "kovaaks" | "osu";
+type ActiveGame = "kovaaks";
 type ScenarioSortMode = "recent" | "plays" | "type";
 type SessionsPaneMode = "overview" | "scenario";
 
 export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
   useAppTheme();
   const { status: updateStatus, checkForUpdate, installUpdate } = useUpdater();
-  const [activeGame, setActiveGame] = useState<ActiveGame>(() =>
-    window.localStorage.getItem("aimmod.activeGame") === "osu" ? "osu" : "kovaaks",
-  );
+  // This fork only ships the KovaaK's app; the osu! workspace was removed.
+  const activeGame = "kovaaks" as ActiveGame;
   const [records, setRecords] = useState<SessionRecord[]>([]);
   const [search, setSearch] = useState(() => readStoredValue(STATS_WINDOW_STORAGE_KEYS.search) ?? "");
   const [selectedScenario, setSelectedScenario] = useState<string | null>(
@@ -8617,10 +8615,6 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
   const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
   const [hubResyncBusy, setHubResyncBusy] = useState(false);
   const updateCheckStartedRef = useRef(false);
-
-  useEffect(() => {
-    window.localStorage.setItem("aimmod.activeGame", activeGame);
-  }, [activeGame]);
 
   // Always-current ref prevents stale closure in event listener
   const selectedRef = useRef<string | null>(null);
@@ -9253,37 +9247,6 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
           flexShrink: 0,
         }}
       >
-        {(["kovaaks", "osu"] as ActiveGame[]).map((game) => {
-          const active = activeGame === game;
-          return (
-            <button
-              key={game}
-              type="button"
-              aria-pressed={active}
-              onClick={() => setActiveGame(game)}
-              style={{
-                alignItems: "center",
-                alignSelf: "center",
-                background: active
-                  ? game === "osu" ? "rgba(255,102,170,0.13)" : "rgba(var(--am-accent-rgb), 0.13)"
-                  : "transparent",
-                border: `1px solid ${active ? game === "osu" ? "rgba(255,102,170,0.45)" : C.accentBorder : C.border}`,
-                borderRadius: 7,
-                color: active ? C.text : C.textMuted,
-                cursor: "pointer",
-                display: "inline-flex",
-                fontFamily: "inherit",
-                fontSize: 10,
-                fontWeight: active ? 750 : 550,
-                marginRight: 7,
-                padding: "6px 10px",
-              }}
-            >
-              {game === "kovaaks" ? "Kovaak's" : "osu!lazer"}
-            </button>
-          );
-        })}
-        <div style={{ alignSelf: "stretch", background: C.border, margin: "8px 10px 8px 5px", width: 1 }} />
         {activeGame === "kovaaks" && ([
           "sessions",
           "hub",
@@ -9326,11 +9289,6 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
             </button>
           );
         })}
-        {activeGame === "osu" && (
-          <div style={{ alignItems: "center", color: C.textMuted, display: "flex", fontSize: 10, padding: "0 8px" }}>
-            osu!lazer workspace
-          </div>
-        )}
         {activeGame === "kovaaks" && (
           <button
             type="button"
@@ -9351,8 +9309,6 @@ export function StatsWindow({ embedded }: { embedded?: boolean } = {}) {
           </button>
         )}
       </div>
-
-      {activeGame === "osu" && <OsuWorkspace />}
 
       {/* ── Sessions content ── */}
       {activeGame === "kovaaks" && rootMode === "sessions" && (

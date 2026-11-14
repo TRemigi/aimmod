@@ -1,5 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <ProjectReference Include="../AimMod.Osu.Runtime.Contracts/AimMod.Osu.Runtime.Contracts.csproj" />
-  </ItemGroup>
-</Project>
